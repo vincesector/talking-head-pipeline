@@ -1,0 +1,9 @@
+{
+  "name": "render3d",
+  "private": true,
+  "type": "module",
+  "description": "Path-traced extruded text and logos as transparent PNG frames",
+  "dependencies": {
+    "puppeteer": "25.14.0"
+  }
+}

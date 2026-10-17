@@ -1,0 +1,18 @@
+# align_words.py doesn't need any of this installed itself -- it shells out
+# to each backend via `uv run --with`, which resolves and caches these on
+# first use. This file is only here for reference, or if you'd rather run a
+# backend by hand in a persistent venv.
+#
+#   uv venv --python 3.11 .venv
+#   uv pip install --python .venv/bin/python -r requirements.txt
+#
+# Versions pinned to what was benchmarked (2026-09-08, macOS arm64).
+
+# --- en / it backend (backends/whisperx_align.py) ---
+whisperx==3.8.6
+torch==2.8.0
+torchaudio==2.8.0
+
+# --- pt backend (backends/crisperwhisper_align.py) ---
+crisperwhisper[transformers]==2.0.2
+ctranslate2==4.8.2  # not listed by the [transformers] extra but imported anyway, see README

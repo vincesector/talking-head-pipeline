@@ -1,0 +1,385 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>scene3d</title>
+<style>html,body{margin:0;background:transparent}canvas{display:block}</style></head>
+<body>
+<script>
+// Path-traced extruded objects over a transparent background. render.mjs injects window.CFG (the shot
+// config, with paths.json and any images inlined) before this runs. Each object is either
+//   {text: "SAVE", ...}   outline from paths.json (glyphs.py), extruded with a rounded bevel, or
+//   {image: <dataURL>}    any logo/icon silhouette (SVG or PNG alpha), extruded the same way,
+//                         optionally on a disc ("medallion": a raised relief on a coin-like body).
+// Studio dome lighting (key softbox, fill, two coloured rims, top strip, floor bounce), GGX metal body
+// and a dielectric (or metallic) face, 180-degree shutter motion blur and thin-lens depth of field.
+// Frames are pure functions of the PLAN frame f, so any frame renders identically in any order.
+// World units = output pixels on the focal plane (z = 0).
+const CFG = window.CFG;
+const W = CFG.width, H = CFG.height, FPS = CFG.fps || 30;
+const MAXN = 4;
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const rad = d => d * Math.PI / 180;
+const hex = (h) => { const n = parseInt(h.replace('#', ''), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); };
+function bez(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx, cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const X = s => ((ax * s + bx) * s + cx) * s, Y = s => ((ay * s + by) * s + cy) * s, dX = s => (3 * ax * s + 2 * bx) * s + cx;
+  return x => { x = clamp(x); let s = x; for (let i = 0; i < 8; i++) { const e = X(s) - x; const d = dX(s); if (Math.abs(e) < 1e-7 || Math.abs(d) < 1e-6) break; s -= e / d; }
+    let lo = 0, hi = 1; for (let i = 0; i < 30 && Math.abs(X(s) - x) > 1e-6; i++) { s = (lo + hi) / 2; if (X(s) < x) lo = s; else hi = s; } return Y(s); };
+}
+const appEase = bez(0.16, 1, 0.3, 1), turnEase = bez(0.22, 0.72, 0.2, 1), exitEase = bez(0.55, 0, 0.8, 0.4);
+const rotX = a => { const c = Math.cos(a), s = Math.sin(a); return [[1, 0, 0], [0, c, -s], [0, s, c]]; };
+const rotY = a => { const c = Math.cos(a), s = Math.sin(a); return [[c, 0, s], [0, 1, 0], [-s, 0, c]]; };
+const rotZ = a => { const c = Math.cos(a), s = Math.sin(a); return [[c, -s, 0], [s, c, 0], [0, 0, 1]]; };
+const mm = (A, B) => A.map((r) => [0, 1, 2].map(j => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
+
+// ---- per-object animation ----
+// in: frame the object has fully arrived (it swings in over enterFrames BEFORE it, so it lands on the word)
+// out: frame it starts leaving (exitFrames). lit: frame its face brightens from faceDim to face, with a nod.
+// spin: {start, rate} degrees and degrees/second about Y. tilt: [x, y] degrees of resting pose.
+// idle: 0..1 amount of the slow perspective wobble (yaw + pitch) that keeps it from reading as a sticker.
+function pose(o, f) {
+  const side = o.side ?? (o.x < 0 ? 1 : -1);
+  const EIN = o.enterFrames ?? 13, EOUT = o.exitFrames ?? 11;
+  const tin = o.enter === 'none' ? 1 : clamp((f - (o.in - EIN)) / EIN);
+  const u = appEase(tin), w = 1 - turnEase(tin);
+  const tout = o.out == null ? 0 : clamp((f - o.out) / EOUT), uo = exitEase(tout);
+  const idle = o.idle ?? 1;
+  const idleY = rad(side * 7 * idle) + rad(5 * idle) * Math.sin(f * 0.06 + side);
+  const idleX = rad(9 * idle) + rad(2.5 * idle) * Math.sin(f * 0.05 + 1.2);
+  const nod = o.lit == null ? 0 : Math.sin(Math.PI * clamp((f - (o.lit - 4)) / 16)) * (f > o.lit - 4 ? 1 : 0);
+  const spin = o.spin ? rad(o.spin.start + o.spin.rate * f / FPS) : 0;
+  const [tx, ty] = (o.tilt || [0, 0]).map(rad);
+  const R = mm(rotY(idleY + ty + spin + rad(-62 * side) * w + rad(70 * side) * uo),
+    mm(rotX(idleX + tx + rad(24) * w - rad(16) * nod), rotZ(rad(-6 * side) * w)));
+  const visible = (o.enter === 'none' || f >= o.in - EIN) && tout < 1;
+  return { R, off: [o.x || 0, (o.y || 0) + 26 * w - 18 * nod, -1100 * (1 - u) - 900 * uo], visible };
+}
+const litK = (o, f) => o.lit == null ? 1 : clamp((f - (o.lit - 3)) / 7);
+
+// ---- 2D signed distance field of a silhouette, in output pixels, centred on its box ----
+const RES = 2, PAD = 40;
+function sdfFromCanvas(drawW, drawH, draw, org) {
+  const w = Math.ceil((drawW + 2 * PAD) * RES), h = Math.ceil((drawH + 2 * PAD) * RES);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d', { willReadFrequently: true });
+  draw(g, w, h);
+  const img = g.getImageData(0, 0, w, h).data;
+  const cov = new Float32Array(w * h); for (let i = 0; i < w * h; i++) cov[i] = img[i * 4 + 3] / 255;
+  const INF = 1e20;
+  function edt(inside) { // exact Euclidean distance transform (Felzenszwalb & Huttenlocher)
+    const f = new Float64Array(w * h);
+    for (let i = 0; i < w * h; i++) { const c = inside ? cov[i] : 1 - cov[i]; f[i] = c > 0.5 ? INF : 0; }
+    const n = Math.max(w, h), v = new Int32Array(n), z = new Float64Array(n + 1), d = new Float64Array(n), ff = new Float64Array(n);
+    const pass = (len, get, set) => {
+      for (let q = 0; q < len; q++) ff[q] = get(q);
+      let k = 0; v[0] = 0; z[0] = -INF; z[1] = INF;
+      for (let q = 1; q < len; q++) {
+        let s = ((ff[q] + q * q) - (ff[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+        while (s <= z[k]) { k--; s = ((ff[q] + q * q) - (ff[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+        k++; v[k] = q; z[k] = s; z[k + 1] = INF;
+      }
+      k = 0; for (let q = 0; q < len; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) * (q - v[k]) + ff[v[k]]; }
+      for (let q = 0; q < len; q++) set(q, d[q]);
+    };
+    for (let x = 0; x < w; x++) pass(h, y => f[y * w + x], (y, val) => { f[y * w + x] = val; });
+    for (let y = 0; y < h; y++) pass(w, x => f[y * w + x], (x, val) => { f[y * w + x] = val; });
+    return f;
+  }
+  const dOut = edt(false), dIn = edt(true);
+  const sd = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const c = cov[i];
+    let d = c > 0.5 ? -(Math.sqrt(dIn[i]) - 0.5) : Math.sqrt(dOut[i]) - 0.5;
+    if (c > 0.02 && c < 0.98) d = 0.5 - c;            // sub-pixel edge from coverage
+    sd[i] = d / RES;
+  }
+  const out = new Float32Array(w * h), K = [1, 4, 6, 4, 1], tmp = new Float32Array(w * h);   // light blur, no stair steps on the bevel
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let s = 0, ws = 0; for (let k = -2; k <= 2; k++) { const xx = Math.min(w - 1, Math.max(0, x + k)); s += K[k + 2] * sd[y * w + xx]; ws += K[k + 2]; } tmp[y * w + x] = s / ws; }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let s = 0, ws = 0; for (let k = -2; k <= 2; k++) { const yy = Math.min(h - 1, Math.max(0, y + k)); s += K[k + 2] * tmp[yy * w + x]; ws += K[k + 2]; } out[y * w + x] = s / ws; }
+  return { data: out, w, h, size: [w / RES, h / RES], org: org || [-(drawW / 2 + PAD), -(drawH / 2 + PAD)], box: [drawW, drawH] };
+}
+function textSdf(o) {
+  const P = CFG.paths[o.text]; if (!P) throw new Error(`"${o.text}" is not in paths.json (run glyphs.py with it)`);
+  const b = P.bbox, cap = CFG.paths._cap, ks = o.height ? o.height / cap : o.width / (b[2] - b[0]);
+  // tile covers the glyphs (descenders included); the object's origin is the centre of the CAP box,
+  // so several words at the same y and size share one baseline
+  const top = Math.min(b[1], -cap) * ks, bot = Math.max(b[3], 0) * ks, bw = (b[2] - b[0]) * ks;
+  return sdfFromCanvas(bw, bot - top, g => { g.setTransform(RES * ks, 0, 0, RES * ks, (PAD - b[0] * ks) * RES, (PAD - top) * RES); g.fillStyle = '#fff'; g.fill(new Path2D(P.d)); },
+    [-(bw / 2 + PAD), top - PAD + cap * ks / 2]);
+}
+async function imageSdf(o) {
+  const img = new Image(); img.src = o.image; await img.decode();
+  const ar = img.naturalHeight / img.naturalWidth;
+  const bw = o.width, bh = o.height || o.width * ar;
+  return sdfFromCanvas(bw, bh, g => { g.setTransform(RES, 0, 0, RES, PAD * RES, PAD * RES); g.drawImage(img, 0, 0, bw, bh); });
+}
+
+const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H; document.body.appendChild(canvas);
+const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true, alpha: true, premultipliedAlpha: false });
+gl.getExtension('EXT_color_buffer_float'); gl.getExtension('EXT_float_blend'); gl.getExtension('OES_texture_float_linear');
+const VS = `#version 300 es
+void main(){ vec2 p = vec2((gl_VertexID<<1)&2, gl_VertexID&2); gl_Position = vec4(p*2.-1.,0,1); }`;
+function prog(fs) {
+  const mk = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { const l = gl.getShaderInfoLog(s); console.error(l); throw new Error(l); } return s; };
+  const p = gl.createProgram(); gl.attachShader(p, mk(gl.VERTEX_SHADER, VS)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const a = gl.getActiveUniform(p, i); u[a.name.replace(/\[0\]$/, '')] = gl.getUniformLocation(p, a.name); }
+  return { p, u };
+}
+window.gpuInfo = () => { const e = gl.getExtension('WEBGL_debug_renderer_info'); return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : '?'; };
+</script>
+
+<script id="trace" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+#define MAXN 4
+uniform vec2 uRes; uniform int uFrame, uPass, uSpp, uN;
+uniform sampler2D uAtlas;
+uniform mat3 uR0[MAXN]; uniform mat3 uR1[MAXN]; uniform vec3 uO0[MAXN]; uniform vec3 uO1[MAXN];
+uniform vec4 uRect[MAXN];    // atlas uv box of the object's SDF tile
+uniform vec4 uGeo[MAXN];     // tile origin xy, tile size xy (world px)
+uniform vec4 uShape[MAXN];   // half thickness, bevel radius, disc radius (0 = none), disc half thickness
+uniform vec3 uFace[MAXN]; uniform vec3 uBody[MAXN];
+uniform vec4 uMat[MAXN];     // body roughness, face roughness, face metallic (0/1), unused
+uniform float uD, uAp, uBoundR; uniform vec3 uBoundC;
+uniform vec3 uRimA, uRimB, uBounce; uniform float uKey, uRimK;
+out vec4 outColor;
+const float PI = 3.14159265;
+uint seed;
+uint pcg(uint v){ uint s = v*747796405u+2891336453u; uint w=((s>>((s>>28u)+4u))^s)*277803737u; return (w>>22u)^w; }
+float rnd(){ seed = pcg(seed); return float(seed)*(1.0/4294967296.0); }
+
+mat3 Rt[MAXN]; vec3 Off[MAXN];
+void setup(float s){
+  for (int i=0;i<MAXN;i++){ if (i>=uN) break; Rt[i] = uR0[i] + (uR1[i]-uR0[i])*s; Off[i] = mix(uO0[i], uO1[i], s); }
+}
+float sd2(int i, vec2 p){
+  vec2 s = vec2(p.x, -p.y) - uGeo[i].xy;
+  vec2 uv = s / uGeo[i].zw;
+  vec2 c = clamp(uv, vec2(0.002), vec2(0.998));
+  return texture(uAtlas, mix(uRect[i].xy, uRect[i].zw, c)).r + length((uv - c) * uGeo[i].zw);
+}
+float slab(float d, float z, float halfT, float rb){
+  vec2 w = vec2(d + rb, abs(z) - halfT + rb);
+  return min(max(w.x,w.y),0.) + length(max(w,0.)) - rb;
+}
+// x: distance, y: part id (object*2, +1 for the disc of a medallion)
+vec2 mapId(vec3 p){
+  vec2 best = vec2(1e9, -1.);
+  for (int i=0;i<MAXN;i++){
+    if (i>=uN) break;
+    vec3 q = Rt[i]*(p - Off[i]);
+    float d = slab(sd2(i, q.xy), q.z, uShape[i].x, uShape[i].y);
+    if (d < best.x) best = vec2(d, float(i*2));
+    if (uShape[i].z > 0.){
+      float dd = slab(length(q.xy) - uShape[i].z, q.z, uShape[i].w, min(uShape[i].y*1.5, uShape[i].w));
+      if (dd < best.x) best = vec2(dd, float(i*2+1));
+    }
+  }
+  return best;
+}
+float mapD(vec3 p){ return mapId(p).x; }
+vec3 calcN(vec3 p){
+  const float h = 0.35; const vec2 k = vec2(1,-1);
+  return normalize(k.xyy*mapD(p+k.xyy*h) + k.yyx*mapD(p+k.yyx*h) + k.yxy*mapD(p+k.yxy*h) + k.xxx*mapD(p+k.xxx*h));
+}
+float march(vec3 ro, vec3 rd){
+  vec3 oc = ro - uBoundC; float R = uBoundR;
+  float b = dot(oc, rd), c = dot(oc,oc) - R*R, disc = b*b - c;
+  if (disc < 0.) return -1.;
+  float sq = sqrt(disc), t = max(0., -b - sq), t1 = -b + sq;
+  for (int i=0;i<300;i++){
+    if (t > t1) return -1.;
+    float d = mapD(ro+rd*t);
+    if (d < 0.03) return t;
+    t += max(d*0.85, 0.03);
+  }
+  return -1.;
+}
+
+vec3 lobe(vec3 d, vec3 c, float r, float soft){ float a = acos(clamp(dot(d, normalize(c)), -1., 1.)); return vec3(1. - smoothstep(r, r + soft, a)); }
+vec3 env(vec3 d){
+  vec3 L = vec3(0.004, 0.006, 0.007);
+  L += uKey * lobe(d, vec3(-0.35, 0.45, 1.0), 0.38, 0.30);                  // key softbox, front top left
+  L += 0.35 * vec3(0.92, 0.98, 1.0) * lobe(d, vec3(0.55, -0.25, 1.0), 0.75, 0.4); // fill
+  L += 9.0 * uRimK * uRimA * lobe(d, vec3(1.0, 0.25, -0.35), 0.34, 0.22);   // rim A, back right
+  L += 6.0 * uRimK * uRimB * lobe(d, vec3(-1.0, -0.15, -0.25), 0.30, 0.2);  // rim B, back left low
+  L += 3.0 * lobe(d, vec3(0.0, 1.0, -0.15), 0.12, 0.10);                    // top strip for the bevels
+  L += 0.6 * uBounce * smoothstep(0.1, -0.6, d.y);                          // floor bounce
+  return L;
+}
+vec3 fresnel(vec3 f0, float c){ return f0 + (1.-f0)*pow(1.-c, 5.); }
+float D_ggx(float nh, float a){ float a2=a*a; float d = nh*nh*(a2-1.)+1.; return a2/(PI*d*d); }
+float G1(float nx, float a){ float a2=a*a; return 2.*nx/(nx+sqrt(a2+(1.-a2)*nx*nx)); }
+float G2(float nl, float nv, float a){ float a2=a*a; float gl = nv*sqrt(a2+(1.-a2)*nl*nl), gv = nl*sqrt(a2+(1.-a2)*nv*nv); return 2.*nl*nv/(gl+gv); }
+mat3 basis(vec3 n){ vec3 t = abs(n.y)<.99 ? normalize(cross(vec3(0,1,0),n)) : vec3(1,0,0); return mat3(t, cross(n,t), n); }
+vec3 sampleVNDF(vec3 V, float a, float u1, float u2){
+  vec3 Vh = normalize(vec3(a*V.x, a*V.y, V.z));
+  float lensq = Vh.x*Vh.x+Vh.y*Vh.y;
+  vec3 T1 = lensq>0. ? vec3(-Vh.y,Vh.x,0)/sqrt(lensq) : vec3(1,0,0);
+  vec3 T2 = cross(Vh,T1);
+  float r=sqrt(u1), phi=2.*PI*u2; float t1=r*cos(phi), t2=r*sin(phi); float s=.5*(1.+Vh.z);
+  t2=(1.-s)*sqrt(1.-t1*t1)+s*t2;
+  vec3 Nh = t1*T1+t2*T2+sqrt(max(0.,1.-t1*t1-t2*t2))*Vh;
+  return normalize(vec3(a*Nh.x, a*Nh.y, max(0.,Nh.z)));
+}
+struct Mat { vec3 diff; vec3 f0; float a; float ps; };
+Mat matAt(int part, vec3 n){
+  int i = part / 2; bool isDisc = part - i*2 == 1;
+  vec3 nl = Rt[i]*n; float face = smoothstep(0.6, 0.9, abs(nl.z));
+  vec3 body = uBody[i];
+  Mat m;
+  if (isDisc){ m.diff = vec3(0.); m.f0 = body; m.a = mix(uMat[i].x, uMat[i].x*0.5, face); m.ps = 1.; return m; }
+  float fm = uMat[i].z;
+  vec3 faceDiff = mix(uFace[i], vec3(0.), fm), faceF0 = mix(vec3(0.045), uFace[i], fm);
+  m.diff = mix(body*0.04, faceDiff, face);
+  m.f0 = mix(body, faceF0, face); m.a = mix(uMat[i].x, uMat[i].y, face); m.ps = mix(0.92, mix(0.3, 1., fm), face);
+  return m;
+}
+void evalBRDF(Mat M, vec3 n, vec3 v, vec3 l, out vec3 fc, out float pdf){
+  fc = vec3(0); pdf = 0.;
+  float nl = dot(n,l), nv = dot(n,v);
+  if (nl<=0. || nv<=0.) return;
+  vec3 h = normalize(v+l); float nh = max(dot(n,h),0.), vh = max(dot(v,h),0.);
+  float D = D_ggx(nh, M.a);
+  vec3 spec = fresnel(M.f0, vh)*D*G2(nl,nv,M.a)/(4.*nv);
+  vec3 dif = M.diff*(1.-fresnel(M.f0,nv).g)*(1.-fresnel(M.f0,nl).g)*nl/PI;
+  fc = spec + dif;
+  pdf = M.ps*D*G1(nv,M.a)/(4.*nv) + (1.-M.ps)*nl/PI;
+}
+vec3 shade(vec3 ro, vec3 rd, float t0){
+  vec3 acc = vec3(0), thr = vec3(1);
+  float t = t0;
+  for (int b=0;b<3;b++){
+    vec3 p = ro + rd*t; vec3 n = calcN(p); vec3 v = -rd;
+    int part = int(mapId(p).y + 0.5);
+    if (dot(n,v) <= 0.) n = normalize(n + v*(0.01-dot(n,v)));
+    mat3 TBN = basis(n); vec3 l; Mat M = matAt(part, n);
+    if (rnd() < M.ps){ vec3 Ht = sampleVNDF(transpose(TBN)*v, M.a, rnd(), rnd()); l = reflect(-v, TBN*Ht); }
+    else { float r1=rnd(), r2=rnd(); float rr=sqrt(r1), ph=2.*PI*r2; l = TBN*vec3(rr*cos(ph), rr*sin(ph), sqrt(max(0.,1.-r1))); }
+    vec3 fc; float pdf; evalBRDF(M, n, v, l, fc, pdf);
+    if (pdf <= 1e-7) break;
+    thr *= fc/pdf;
+    ro = p + n*0.25; rd = l;
+    float th = march(ro, rd);
+    if (th < 0.){ acc += thr*min(env(rd), vec3(12.)); break; }
+    t = th;
+  }
+  return acc;
+}
+void main(){
+  uvec2 px = uvec2(gl_FragCoord.xy);
+  seed = pcg(pcg(pcg(px.x + pcg(px.y)) + uint(uPass)*7919u) + uint(uFrame)*104729u);
+  vec4 sum = vec4(0);
+  for (int s=0;s<uSpp;s++){
+    setup(rnd());                                             // 180-degree shutter
+    vec2 ndc = (gl_FragCoord.xy - 0.5 + vec2(rnd(), rnd()))/uRes - 0.5;
+    vec3 Pf = vec3(ndc.x*uRes.x, ndc.y*uRes.y, 0.);
+    float a1 = rnd()*2.*PI, rr = sqrt(rnd())*uAp;
+    vec3 o = vec3(cos(a1)*rr, sin(a1)*rr, uD);
+    vec3 rd = normalize(Pf - o);
+    float th = march(o, rd);
+    if (th > 0.) sum += vec4(shade(o, rd, th), 1.);
+  }
+  outColor = sum;
+}
+</script>
+
+<script id="post" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform sampler2D uAcc; uniform float uInv, uExp; out vec4 o;
+float shoulder(float x){ const float k = 0.92; return x < k ? x : k + (1.-k)*(1.-exp(-(x-k)/(1.-k))); }
+float enc(float x){ x = clamp(x,0.,1.); return x <= 0.0031308 ? 12.92*x : 1.055*pow(x, 1./2.4) - 0.055; }
+void main(){
+  vec4 a = texelFetch(uAcc, ivec2(gl_FragCoord.xy), 0) * uInv;
+  float al = a.a;
+  vec3 c = al > 0. ? a.rgb/al*uExp : vec3(0);
+  o = vec4(enc(shoulder(c.r)), enc(shoulder(c.g)), enc(shoulder(c.b)), al);   // straight alpha
+}
+</script>
+
+<script>
+let trace, post, accum, accFB, atlas, OBJ = [];
+const L = CFG.light || {};
+const BODY_PRESETS = { 'dark-metal': ['#5b6a6e', 0.16], steel: ['#c4c8cc', 0.14], gold: ['#ffd27a', 0.12], chrome: ['#e8eaec', 0.05], copper: ['#f2a07a', 0.16] };
+(async () => {
+  if (CFG.objects.length > MAXN) throw new Error(`at most ${MAXN} objects per shot`);
+  const sdfs = [];
+  for (const o of CFG.objects) sdfs.push(o.text != null ? textSdf(o) : await imageSdf(o));
+  // stack every tile in one R16F atlas (sampler arrays cannot be indexed by a loop in GLSL ES 3.00)
+  const GAP = 4, AW = Math.max(...sdfs.map(s => s.w)), AH = sdfs.reduce((a, s) => a + s.h + GAP, 0);
+  const data = new Float32Array(AW * AH).fill(1e4);
+  let y0 = 0;
+  sdfs.forEach((s, i) => {
+    for (let y = 0; y < s.h; y++) data.set(s.data.subarray(y * s.w, (y + 1) * s.w), (y0 + y) * AW);
+    const o = CFG.objects[i];
+    const [bodyHex, bodyRough] = BODY_PRESETS[o.body || 'dark-metal'] || [o.body, o.bodyRough ?? 0.16];
+    const halfT = (o.depth ?? 44) / 2;
+    OBJ.push({ o, rect: [0.5 / AW, (y0 + 0.5) / AH, (s.w - 0.5) / AW, (y0 + s.h - 0.5) / AH], geo: [...s.org, ...s.size],
+      shape: [o.medallion ? halfT + (o.relief ?? 6) : halfT, o.bevel ?? 4.5, o.medallion ? (o.medallion.radius ?? Math.max(...s.box) / 2 * 1.18) : 0, halfT],
+      body: hex(bodyHex), mat: [o.bodyRough ?? bodyRough, o.faceRough ?? 0.26, o.faceMetal ? 1 : 0, 0],
+      face: hex(o.face || '#f2f4f5'), faceDim: hex(o.faceDim || o.face || '#f2f4f5'),
+      reach: Math.hypot(s.size[0], s.size[1]) / 2 + (o.medallion ? Math.max(...s.box) : 0) });
+    y0 += s.h + GAP;
+  });
+  atlas = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, atlas);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, AW, AH, 0, gl.RED, gl.FLOAT, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  accum = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, accum);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, W, H, 0, gl.RGBA, gl.FLOAT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  accFB = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, accFB);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, accum, 0);
+  trace = prog(document.getElementById('trace').textContent);
+  post = prog(document.getElementById('post').textContent);
+  window.ready = true;
+})().catch(e => { console.error(e.stack || String(e)); window.failed = String(e); });
+
+window.renderAt = (f) => {
+  const spp = CFG.spp || 128, per = 4, passes = Math.max(1, Math.round(spp / per));
+  const live = OBJ.filter(x => pose(x.o, f - 0.25).visible || pose(x.o, f + 0.25).visible);
+  gl.viewport(0, 0, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, accFB); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  if (live.length) {
+    gl.useProgram(trace.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, atlas); gl.uniform1i(trace.u.uAtlas, 0);
+    const cat = (fn, n) => { const a = []; live.forEach(x => a.push(...fn(x))); while (a.length < n * MAXN) a.push(0); return new Float32Array(a); };
+    const rows = R => [R[0][0], R[0][1], R[0][2], R[1][0], R[1][1], R[1][2], R[2][0], R[2][1], R[2][2]];
+    const P0 = live.map(x => pose(x.o, f - 0.25)), P1 = live.map(x => pose(x.o, f + 0.25));
+    gl.uniformMatrix3fv(trace.u.uR0, false, cat(x => rows(P0[live.indexOf(x)].R), 9));
+    gl.uniformMatrix3fv(trace.u.uR1, false, cat(x => rows(P1[live.indexOf(x)].R), 9));
+    gl.uniform3fv(trace.u.uO0, cat(x => P0[live.indexOf(x)].off, 3));
+    gl.uniform3fv(trace.u.uO1, cat(x => P1[live.indexOf(x)].off, 3));
+    gl.uniform4fv(trace.u.uRect, cat(x => x.rect, 4)); gl.uniform4fv(trace.u.uGeo, cat(x => x.geo, 4));
+    gl.uniform4fv(trace.u.uShape, cat(x => x.shape, 4)); gl.uniform4fv(trace.u.uMat, cat(x => x.mat, 4));
+    gl.uniform3fv(trace.u.uBody, cat(x => x.body, 3));
+    gl.uniform3fv(trace.u.uFace, cat(x => { const k = litK(x.o, f); return x.faceDim.map((v, i) => v + (x.face[i] - v) * k); }, 3));
+    gl.uniform1i(trace.u.uN, live.length);
+    // bounding sphere over both shutter poses of every live object
+    const pts = [...P0, ...P1].map((p, i) => ({ c: p.off, r: live[i % live.length].reach + 60 }));
+    const c = [0, 1, 2].map(k => pts.reduce((a, p) => a + p.c[k], 0) / pts.length);
+    const R = Math.max(...pts.map(p => Math.hypot(p.c[0] - c[0], p.c[1] - c[1], p.c[2] - c[2]) + p.r));
+    gl.uniform3fv(trace.u.uBoundC, c); gl.uniform1f(trace.u.uBoundR, R);
+    gl.uniform2f(trace.u.uRes, W, H);
+    gl.uniform1f(trace.u.uD, CFG.camera?.distance ?? 2600); gl.uniform1f(trace.u.uAp, CFG.camera?.aperture ?? 10);
+    gl.uniform3fv(trace.u.uRimA, hex(L.rimA || '#08d1e3')); gl.uniform3fv(trace.u.uRimB, hex(L.rimB || '#ffb35c'));
+    gl.uniform3fv(trace.u.uBounce, hex(L.bounce || '#3a4448'));
+    gl.uniform1f(trace.u.uKey, L.key ?? 3.4); gl.uniform1f(trace.u.uRimK, L.rim ?? 1);
+    gl.uniform1i(trace.u.uFrame, Math.round(f)); gl.uniform1i(trace.u.uSpp, per);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    const px = new Float32Array(4);
+    for (let i = 0; i < passes; i++) {
+      gl.uniform1i(trace.u.uPass, i); gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (i % 2 === 1) gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, px);   // keep the GPU queue short (watchdog)
+    }
+    gl.disable(gl.BLEND);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.useProgram(post.p);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, accum); gl.uniform1i(post.u.uAcc, 0);
+  gl.uniform1f(post.u.uInv, 1 / (passes * per)); gl.uniform1f(post.u.uExp, CFG.exposure ?? 1);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  return canvas.toDataURL('image/png');
+};
+</script>
+</body></html>

@@ -1,0 +1,10 @@
+{
+  "width": 640, "height": 640, "fps": 30, "spp": 160,
+  "f0": 0, "f1": 120,
+  "light": {"rimA": "#ffffff", "rimB": "#ffb35c", "key": 3.0},
+  "objects": [
+    {"image": "mark.svg", "x": 0, "y": 0, "width": 300, "depth": 26, "relief": 7, "bevel": 3,
+     "medallion": {"radius": 230}, "body": "gold", "face": "#ffd27a", "faceMetal": true, "faceRough": 0.2,
+     "enter": "none", "idle": 0.25, "spin": {"start": -20, "rate": 45}}
+  ]
+}

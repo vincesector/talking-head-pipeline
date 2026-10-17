@@ -1,0 +1,36 @@
+[
+ {
+  "from": 10,
+  "to": 60,
+  "tokens": [
+   {
+    "w": "This"
+   },
+   {
+    "w": "is"
+   },
+   {
+    "w": "a"
+   },
+   {
+    "w": "placeholder",
+    "e": true
+   }
+  ]
+ },
+ {
+  "from": 62,
+  "to": 120,
+  "tokens": [
+   {
+    "w": "plan.json"
+   },
+   {
+    "w": "drives"
+   },
+   {
+    "w": "everything"
+   }
+  ]
+ }
+]

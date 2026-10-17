@@ -1,0 +1,45 @@
+# dependencies and environments
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.remotion/
+.cache/
+
+# media: recordings, renders, frames, mattes, audio (never commit footage)
+*.mp4
+*.mov
+*.mkv
+*.m4a
+*.wav
+*.mp3
+*.aac
+*.webm
+renders/
+qa/
+qa_frames/
+check/
+frames/
+*_autocut/
+
+# template runtime assets (bring your own; placeholders are tracked explicitly below)
+template/remotion/public/*
+!template/remotion/public/track.json
+!template/remotion/public/captions.json
+
+# models, fonts and weights are downloaded, never committed
+*.tflite
+*.pth
+*.model
+*.onnx
+*.safetensors
+*.bin
+tools/render3d/fonts/
+tools/render3d/examples/paths.json
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

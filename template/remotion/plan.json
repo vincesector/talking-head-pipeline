@@ -1,0 +1,99 @@
+{
+  "_readme": "Placeholder plan so the template type-checks and opens in the studio. Replace it with the approved plan (plan_common.py writes it). Needs public/raw.mp4.",
+  "source": "raw.mp4",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "durationInFrames": 300,
+  "zoomHeadroom": 1.33,
+  "captions": {
+    "pairing": "inter-instrument",
+    "trackedUntil": 0
+  },
+  "finish": {
+    "grain": 0.08,
+    "vignette": 0.25
+  },
+  "events": [
+    {
+      "type": "punch",
+      "at": 45,
+      "hold": 50,
+      "preset": "sustain",
+      "reason": "lands on 'placeholder', releases after 'everything'"
+    },
+    {
+      "type": "side",
+      "from": 130,
+      "to": 210,
+      "subject": "left",
+      "reason": "a number to hold while it is explained",
+      "cards": [
+        {
+          "kind": "stat",
+          "at": 130,
+          "props": {
+            "label": "Example",
+            "value": "42%",
+            "sub": "a number the speaker says"
+          },
+          "punches": [
+            {
+              "at": 150,
+              "until": 180
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "screen",
+      "from": 220,
+      "to": 299,
+      "page": "example",
+      "url": "example.com/dashboard",
+      "tabTitle": "Example",
+      "tabIcon": "E",
+      "zoom": [
+        {
+          "at": 236,
+          "scale": 1,
+          "x": 960,
+          "y": 540
+        },
+        {
+          "at": 252,
+          "scale": 1.6,
+          "x": 700,
+          "y": 400
+        },
+        {
+          "at": 280,
+          "scale": 1.6,
+          "x": 700,
+          "y": 400
+        },
+        {
+          "at": 296,
+          "scale": 1,
+          "x": 960,
+          "y": 540
+        }
+      ],
+      "cursor": [
+        {
+          "at": 246,
+          "to": "cardA",
+          "click": true
+        }
+      ],
+      "targets": {
+        "cardA": {
+          "x": 420,
+          "y": 330
+        }
+      },
+      "reason": "the walkthrough beat: showing beats saying"
+    }
+  ]
+}

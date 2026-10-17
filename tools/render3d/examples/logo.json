@@ -1,0 +1,10 @@
+{
+  "width": 640, "height": 640, "fps": 30, "spp": 128,
+  "f0": 0, "f1": 120,
+  "light": {"rimA": "#7aa2ff", "rimB": "#ffd27a"},
+  "objects": [
+    {"image": "mark.svg", "x": 0, "y": 0, "width": 360, "depth": 60, "bevel": 6,
+     "body": "steel", "face": "#e9ecef", "faceMetal": true, "faceRough": 0.1,
+     "enter": "none", "idle": 0.3, "spin": {"start": -30, "rate": 40}}
+  ]
+}

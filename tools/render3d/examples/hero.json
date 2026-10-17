@@ -1,0 +1,13 @@
+{
+  "width": 1080, "height": 420, "fps": 30, "spp": 128,
+  "f0": 0, "f1": 90,
+  "paths": "paths.json",
+  "camera": {"distance": 2600, "aperture": 10},
+  "light": {"rimA": "#08d1e3", "rimB": "#ffb35c", "key": 3.4},
+  "objects": [
+    {"text": "BUILD", "x": -250, "y": 0, "width": 420, "depth": 44, "bevel": 4.5, "body": "dark-metal",
+     "face": "#f2f4f5", "faceDim": "#0b0d0e", "in": 12, "lit": 24, "out": 78},
+    {"text": "FAST", "x": 250, "y": 0, "width": 360, "depth": 44, "bevel": 4.5, "body": "dark-metal",
+     "face": "#ffb35c", "faceDim": "#0b0d0e", "in": 20, "lit": 34, "out": 78}
+  ]
+}
