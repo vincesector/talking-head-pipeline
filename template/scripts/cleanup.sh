@@ -2,7 +2,7 @@
 # Delete the disposable intermediates once the creator has confirmed the video is done.
 #
 # NEVER run this without asking first. The PNG matte sequence is the bulk of
-# the project size and regenerating it costs ~12 minutes per minute of footage.
+# the project size and regenerating it costs ~2 minutes per minute of footage.
 #
 # Usage: ./scripts/cleanup.sh [--dry-run]
 set -euo pipefail

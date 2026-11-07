@@ -84,8 +84,8 @@ transcript.** If you cannot name all three, the effect does not go in.
     with equal padding from every frame edge (at least ~90 px at 1080 wide).
 33. **Hero word behind the speaker: above the head, every glyph readable.** A number must read as the
     number: no digit may sit fully behind the head. Check a still at landing + 25.
-34. **Roto is rationed.** It costs ~12 minutes of compute per minute of footage. Openers and hero
-    moments; 15 s per video by default.
+34. **Roto is rationed.** It costs ~2 minutes of GPU time per minute of footage (RVM), plus a hand-checked
+    sandwich. Openers and hero moments; 15 s per video by default.
 35. **Objects and icons are real logos or sourced/generated images.** Code draws motion, text, UI and
     charts, not objects (arrowheads especially).
 36. **Recreated product UI is one-to-one.** Same labels, layout, fields and flow as the real app; only

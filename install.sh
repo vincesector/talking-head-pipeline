@@ -49,6 +49,8 @@ case "$(uname -s)-$(uname -m)" in
 esac
 [ -x "$HOME/.local/share/talking-head-pipeline/syncnet/venv/bin/python" ] && echo "  syncnet  ok" \
   || echo "  syncnet  not set up yet: run scripts/sync/setup_syncnet.sh once (~150 MB weights), or always pass --offset"
+echo "  matte    RVM (GPL-3.0, not shipped): add torch torchvision opencv-contrib-python to each project venv;"
+echo "           model code + weights are fetched into ~/.cache/rvm/ on the first matte run"
 [ $miss = 1 ] && echo && echo "install the MISSING tools first (docs/SETUP.md)."
 
 cat <<MSG

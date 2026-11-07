@@ -22,7 +22,11 @@ scripts/                       tracking, matting, cues, plan writer, SFX, render
 
 ```bash
 uv venv --python 3.11 .venv          # mediapipe has no wheels past 3.12
-uv pip install --python .venv/bin/python "mediapipe==0.10.21" opencv-python backgroundremover numpy pillow
+uv pip install --python .venv/bin/python "mediapipe==0.10.21" opencv-contrib-python numpy pillow torch torchvision
+# opencv-contrib-python, never plain opencv-python: the optional --refine guided filter needs
+# cv2.ximgproc, and having both installed breaks it. The matter (RVM) needs torch. The legacy
+# --engine u2net additionally needs `backgroundremover`.
+# The first matte run fetches the RVM model code and rvm_resnet50.pth (108 MB) into ~/.cache/rvm/.
 scripts/download_models.sh           # MediaPipe face detector
 cd remotion && pnpm install          # or npm install
 ```

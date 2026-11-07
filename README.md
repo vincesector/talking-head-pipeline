@@ -130,7 +130,7 @@ First runs download models (a few GB in total). Later runs start in seconds.
 | | Minimum | Notes |
 |---|---|---|
 | OS | macOS 13+ or Linux (x86_64/arm64) | Windows via WSL2 |
-| CPU/GPU | Apple Silicon, or any CPU; NVIDIA optional | GPU speeds up Whisper, SyncNet, matting, 3D |
+| CPU/GPU | Apple Silicon, or any CPU; NVIDIA optional | GPU speeds up Whisper, SyncNet, matting (RVM on Apple Silicon: ~15-22 fps at 1080x1920, ~2 GB), 3D |
 | RAM | 16 GB | 32 GB comfortable for long takes |
 | Disk | ~10 GB free | model caches + matte frames during a project |
 | ffmpeg | 5+ with libx264 | |
@@ -148,6 +148,7 @@ scripts/autocut/                   autocut.py and its stages (cut, snap, audit, 
 scripts/align/                     forced aligner, retake / stumble finders
 scripts/sync/                      SyncNet setup + lip-sync detection, manual clap measure
 scripts/master/sync_trim.sh        final render audio-delay trim (+ optional loudness)
+scripts/matte/                     rvm_matte.py: the Robust Video Matting runner (RVM itself is fetched at runtime)
 template/                          Remotion project + per-project scripts (track, matte, cues, plan, SFX, render, patch)
 tools/render3d/                    path-traced 3D type and logos to transparent PNG frames
 docs/                              SETUP, AGENT_GUIDE, STYLE_RULES, LAYOUTS, 3D
@@ -195,9 +196,15 @@ for individuals and companies up to 3 employees and requires a paid company lice
 
 Third-party models and tools are downloaded from their sources and keep their own licenses:
 SyncNet ([joonson/syncnet_python](https://github.com/joonson/syncnet_python), MIT), Whisper
-(MIT), mlx-whisper (MIT), faster-whisper (MIT), WhisperX (BSD-2), CrisperWhisper (**CC BY-NC 4.0: non-commercial**, see below), MediaPipe (Apache-2.0), backgroundremover / U2-Net (MIT / Apache-2.0),
+(MIT), mlx-whisper (MIT), faster-whisper (MIT), WhisperX (BSD-2), CrisperWhisper (**CC BY-NC 4.0: non-commercial**, see below), MediaPipe (Apache-2.0), Robust Video Matting (**GPL-3.0**, see below), backgroundremover / U2-Net (MIT / Apache-2.0, legacy fallback),
 Google Fonts (mostly SIL OFL). Check each before commercial use. Sound effects and fonts you add are
 under their own licenses.
+
+> **Third-party: Robust Video Matting (GPL-3.0), fetched at runtime, not included in this repo.**
+> The roto matte uses [RVM](https://github.com/PeterL1n/RobustVideoMatting). Its model code and
+> weights are downloaded into `~/.cache/rvm/` on first use (pinned commit, SHA-256 checked); this MIT
+> repo contains none of it. Check its licence before shipping it inside a product. The matte frames
+> it produces are not covered by the GPL.
 
 > **Commercial use and CrisperWhisper.** The verbatim pass (stumble detection and the final cut
 > check) uses the CrisperWhisper weights, which are licensed CC BY-NC 4.0. If your videos are

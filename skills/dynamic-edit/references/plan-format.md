@@ -75,7 +75,7 @@ A table, not the JSON:
   0:40.1-0:52.0   SIDE      stat, list      three numbers to hold while explained
   1:00.2-1:15.0   SCREEN    dashboard       the walkthrough; zooms on "this number"
 
-  Roto: 6.0 s of 4:12 (matting ~1.2 min) | punches 6 | longest gap 9.4 s | 3D renders: 1 hero
+  Roto: 6.0 s of 4:12 (matting ~15 s) | punches 6 | longest gap 9.4 s | 3D renders: 1 hero
 ```
 
 Then wait.

@@ -22,8 +22,9 @@ Read before planning: `$THP_HOME/docs/STYLE_RULES.md` (the craft rules), `$THP_H
 **Input contract: the footage is already cut.** No silence removal, no filler pass here. A raw take
 goes to `/autocut` first; come back with its `clean.mp4` and its workdir (for verbatim words).
 
-**Never skip the plan step.** Rotoscoping costs about 12 minutes per minute of footage and a full
-render tens of minutes. A wrong guess caught in a text plan costs nothing.
+**Never skip the plan step.** Rotoscoping costs about 2 minutes of GPU time per minute of footage
+(Robust Video Matting on Apple Silicon; the old u2net engine was ~30) plus a hand-checked sandwich,
+and a full render tens of minutes. A wrong guess caught in a text plan costs nothing.
 
 ## Workflow
 
@@ -34,7 +35,11 @@ P=<projects dir>/<slug>                 # ask where the human keeps video projec
 cp -R "$THP_HOME/template" "$P"
 cd "$P"
 uv venv --python 3.11 .venv            # mediapipe has no wheels past 3.12
-uv pip install --python .venv/bin/python "mediapipe==0.10.21" opencv-python backgroundremover numpy pillow
+uv pip install --python .venv/bin/python "mediapipe==0.10.21" opencv-contrib-python numpy pillow torch torchvision
+# opencv-contrib-python, never plain opencv-python: the optional --refine guided filter needs
+# cv2.ximgproc, and having both installed breaks it. The matter (RVM) needs torch. The legacy
+# --engine u2net additionally needs `backgroundremover`.
+# First matte run fetches the RVM model code and weights (108 MB) into ~/.cache/rvm/.
 scripts/download_models.sh             # MediaPipe face detector (not shipped in the repo)
 (cd remotion && pnpm install)          # or npm install
 cp "<autocut workdir>/clean.mp4" remotion/public/raw.mp4
@@ -83,7 +88,8 @@ If the human named a specific effect at a specific moment, that is the plan for 
 
 ### 5. Build what the plan needs, nothing more
 
-- **Roto windows:** `scripts/render_and_qa.sh` mattes them; or `scripts/matte_frames.py` per window.
+- **Roto windows:** `scripts/render_and_qa.sh` mattes them; or `scripts/matte_frames.py` per window
+  (always pass `--cuts remotion/public/cuts.json` when it exists: RVM resets at each shot change).
 - **3D hero type / 3D assets:** `tools/render3d` (see docs/3D.md). Stills first (`--stills`), look at
   them, then `--clip --dir=remotion/public/<name>`. Put the same in/out frames in the shot as the
   plan event's `at`/`until`.
@@ -140,7 +146,7 @@ with its word.
 
 Ask first. `scripts/cleanup.sh` deletes matte PNGs, frame dumps, QA sheets, drafts, the venv and
 node_modules; it keeps the plan, source, track, captions and final render. Regenerating a matte costs
-~12 min per footage minute, so never run it unprompted.
+~2 min per footage minute, so never run it unprompted.
 
 ## Choosing effects (a toolbox, not a running order)
 

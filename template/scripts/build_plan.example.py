@@ -22,7 +22,7 @@ beats = [
     ("forty percent@31.2", "standard", "every single month@33.9", "the number the argument hangs on"),
 ]
 
-# Optional hero word behind the subject (needs a roto window; roto costs ~12 min per footage minute).
+# Optional hero word behind the subject (needs a roto window; roto costs ~2 min of GPU time per footage minute plus a QA pass).
 hero = None
 # hero = {"land": "broken@12.4", "hold": 40, "lines": ["BROKEN"], "size": 0.5, "y": -0.2,
 #         "reason": "the turn of the story", "roto": (-10, 50), "roto_reason": "hero word passes behind"}

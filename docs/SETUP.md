@@ -1,6 +1,6 @@
 # Setup
 
-Everything heavy (Whisper, CrisperWhisper, WhisperX, SyncNet, MediaPipe, the matting model, fonts,
+Everything heavy (Whisper, CrisperWhisper, WhisperX, SyncNet, MediaPipe, the matting model (RVM), fonts,
 Chrome) is **downloaded on first use or by a setup script**. Nothing third-party is shipped in this
 repo. Expect a few GB of model caches after the first full run.
 
@@ -87,8 +87,21 @@ on some Macs with a Metal "Service is unavailable" fault. Python 3.11 (no wheels
 
 ### Matting model - automatic
 
-`matte_frames.py` drives `backgroundremover` (u2net_human_seg), which downloads its weights on first
-use (~170 MB). Throughput ~2.4x slower than realtime at 1080p: budget roto seconds.
+`matte_frames.py` drives [Robust Video Matting](https://github.com/PeterL1n/RobustVideoMatting)
+(RVM, ResNet50) through `scripts/matte/rvm_matte.py`. Needs `torch`, `torchvision` and
+`opencv-contrib-python` in the project venv (see `template/README.md`). On the first run it downloads
+into `~/.cache/rvm/` (override with `RVM_CACHE`):
+
+- the official model code, 8 small files pinned to upstream commit `53d74c6`, each SHA-256 checked;
+- `rvm_resnet50.pth` (108 MB) from the upstream v1.0.0 release, checked by size and SHA-256.
+
+Every later run works offline. Runs on the Mac GPU (MPS) at about 15-22 fps for 1080x1920 on an M3 Max
+(~2 GB), versus about 0.3-1 fps for the old u2net engine, which is still available as
+`--engine u2net` for one release (needs `backgroundremover`). NVIDIA (CUDA) and CPU are selected
+automatically when there is no MPS; those paths are untested here.
+
+**Third-party: Robust Video Matting (GPL-3.0), fetched at runtime, not included in this repo.**
+Check its licence before shipping it inside a product. Output frames are not covered by the GPL.
 
 ### Fonts
 

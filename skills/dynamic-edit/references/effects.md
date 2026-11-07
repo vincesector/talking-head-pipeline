@@ -326,19 +326,31 @@ Fonts and caption motion: `lib/fontPairings.ts`, `lib/motionCurves.ts`, `lib/Cap
 ## Rotoscope segments
 
 ```bash
-./.venv/bin/python scripts/matte_frames.py IN.mp4 --out public/cut --smooth 3
+./.venv/bin/python scripts/matte_frames.py IN.mp4 --out public/cut --from-frame A --to-frame B \
+  --track public/track.json --cuts public/cuts.json
 ```
 
 Writes an RGBA PNG sequence. Consume in Remotion with `Img` indexed off
 `useCurrentFrame()`.
 
-- Throughput: 240 frames of 1080p in ~100s, roughly 2.4x slower than realtime.
-- The script repairs near-empty masks from the nearest good neighbour and applies
-  a 3-frame temporal average. It prints `dead=`, anything above 0 is a problem
-  worth investigating before rendering.
-- Matte quality: u2net_human_seg gives a clean silhouette with a soft edge. Fine
-  behind a shoulder, not fine for fine hair on a busy background. Upgrade path is
-  MatAnyone, which needs a SAM2 first-frame mask.
+- Engine: Robust Video Matting (ResNet50) on the Mac GPU (MPS). Measured on an M3 Max at
+  1080x1920: 15-22 fps end to end (about realtime), ~2 GB peak, flat however long the window is,
+  because each PNG is written as it goes. The model alone does ~40 fps; PNG writes are the rest.
+  The old u2net engine did 0.3-1 fps and up to 15 GB.
+- RVM is GPL-3.0. Its model code and weights are fetched into `~/.cache/rvm/` on the first run
+  and are not part of this repo.
+- RVM is recurrent. The script resets its state at every shot in `--cuts` (always pass
+  it) and starts 15 frames before `--from-frame`, discarding them, so the matte is
+  settled when the window opens. `--smooth` only applies to `--engine u2net`.
+- No edge hardening by default, so curls stay strands. For a bright backdrop where a
+  soft strand reads as halo add `--refine` (guided filter + sigmoid, `--pivot 0.55`
+  chokes inward). Needs `opencv-contrib-python`.
+- It prints `low_coverage=`: frames whose mask is under 25% of the window's best. They
+  are not repaired; look at them before rendering (see qa.md gate 1).
+- Matte quality: curls separated, hands solid even when motion-blurred, props and desk
+  dropped. People only: a held phone or mic is not guaranteed to be kept.
+- `--engine u2net` is the previous engine (CPU, letterboxed 640 predict, 3-frame average,
+  guided filter, sigmoid). Kept for one release, then deleted.
 
 ### Layer order
 

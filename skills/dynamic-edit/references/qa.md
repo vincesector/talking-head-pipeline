@@ -14,7 +14,10 @@ print(f"dead={(cov < 0.05).sum()}  min={cov.min()*100:.2f}%  worst_jump={np.abs(
 ```
 
 Pass: `dead` = 0, `min` > 25% of the mean, `worst_jump` < 8 points. `matte_frames.py` also prints
-`repaired=` (frames patched from a neighbour): ones and twos are fine, investigate above ~5.
+`low_coverage=`: frames whose mask is under 25% of the window's best. Nothing is patched (RVM
+streams), so any non-zero count means look at those frames. Also look at the first frame after every
+cut in `cuts.json`: RVM's state is reset there. Add one visual check: composite a gesture frame over
+a bright colour and look at the hands and the curls.
 
 ## 2. Occlusion (if anything is sandwiched)
 

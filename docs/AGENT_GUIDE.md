@@ -103,7 +103,7 @@ Workdir: `<raw dir>/<raw stem>_autocut/`. Every stage is cached and skipped on r
 3. **Name why / in / out for every event** from the words. The plan writer enforces anchors.
 4. **Check the geometry before promising it**: zoom headroom for reframes, the face box for anything
    placed beside the head, the caption band for anything near the bottom, platform safe zones on 9:16.
-5. **Budget the expensive things**: roto seconds (~12 min compute per footage minute), 3D frames,
+5. **Budget the expensive things**: roto seconds (~2 min GPU time per footage minute, plus the QA pass), 3D frames,
    full renders. Say the cost in the plan.
 6. **Present a table**, wait, then re-read plan.json from disk.
 
@@ -146,7 +146,7 @@ Report gates with their numbers. Then open the file for the human (`open` / `xdg
 | Effects drift late by the end | variable frame rate source | re-cut (cut_video encodes CFR); check frames/duration |
 | Caption slides after every camera angle change | tracking without `--cuts` | re-track with `--cuts`; add missed boundaries |
 | Graphic in front of the matte | a layer not wrapped in its own AbsoluteFill | wrap it |
-| Matte holes / a sign fused to the silhouette | matting on a squashed frame, bright object touching the subject | matte_frames letterboxes; use `--track` region filtering |
+| Matte holes / a sign fused to the silhouette | matting on a squashed frame, bright object touching the subject | the default RVM engine rarely does this; use `--track` region filtering, `--exclude` for a static sign |
 | `mp.solutions` AttributeError / Metal "Service is unavailable" | MediaPipe 1.0+ | `mediapipe==0.10.21`, Python 3.11 |
 | WebGL scene black or render fails headless | GL backend | keep `setChromiumOpenGlRenderer('angle')` |
 | Render plays blank in QuickTime | yuvj420p output | re-encode to yuv420p bt709 |

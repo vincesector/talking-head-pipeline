@@ -4,14 +4,17 @@ set -euo pipefail
 P=$1; NAME=${2:-$(basename "$P")-v1}; cd "$P"
 H=$(python3 -c "
 import json; b=[e for e in json.load(open('remotion/plan.json'))['events'] if e['type']=='bigWord']; print(b[0]['at'] if b else -1)")
-# every roto window gets its matte; frame numbers are absolute so they share one folder.
+# every roto window gets its matte (RVM on the GPU, ~15-20 fps; --engine u2net is the old CPU
+# path); frame numbers are absolute so they share one folder. --cuts resets RVM's recurrent
+# state at each shot change.
 # KEEP_MATTE=1 reuses an existing matte folder when the windows did not change (a plan
 # tweak to sizes or a scene must not cost the matte again).
 if [ "${KEEP_MATTE:-0}" = 1 ] && [ -d remotion/public/cut ]; then echo "matte kept ($(ls remotion/public/cut | wc -l | tr -d ' ') frames)"; else
 rm -rf remotion/public/cut
+CUTS=$([ -f remotion/public/cuts.json ] && echo "--cuts remotion/public/cuts.json" || true)
 python3 -c "
 import json; [print(e['from'], e['to']) for e in json.load(open('remotion/plan.json'))['events'] if e['type']=='roto']" | while read -r R0 R1; do
-  ./.venv/bin/python scripts/matte_frames.py remotion/public/raw.mp4 --out remotion/public/cut --from-frame "$R0" --to-frame "$R1" --track remotion/public/track.json | tail -1
+  ./.venv/bin/python scripts/matte_frames.py remotion/public/raw.mp4 --out remotion/public/cut --from-frame "$R0" --to-frame "$R1" --track remotion/public/track.json $CUTS | tail -1
 done
 fi
 mkdir -p renders; ( cd remotion && npx remotion render src/index.ts Edit "../renders/$NAME.mp4" --codec=h264 2>&1 | grep -E "Encoded|Error" | tail -1 )
