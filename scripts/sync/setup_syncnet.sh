@@ -52,6 +52,38 @@ else
 fi
 mkdir -p "$REPO/data" "$REPO/detectors/s3fd/weights"
 
+# --- Apple GPU patches (idempotent) --------------------------------------
+# S3FD face detection runs on MPS (4.9 -> 20 fps); SyncNet's lip model stays on CPU
+# (MPS lacks max_pool3d_with_indices). The box decode/NMS step MUST run on CPU: on MPS
+# it returns garbage boxes with correct confidences. Measured 2026-11-07.
+"$VENV/bin/python" - "$REPO" <<'PYEOF'
+import sys
+from pathlib import Path
+repo = Path(sys.argv[1])
+
+def patch(rel, old, new):
+    f = repo / rel
+    text = f.read_text()
+    if new in text:
+        print(f"{rel}: GPU patch already applied")
+    elif old in text:
+        f.write_text(text.replace(old, new, 1))
+        print(f"{rel}: GPU patch applied")
+    else:
+        sys.exit(f"{rel}: expected code not found, syncnet_python changed upstream; re-derive the patch")
+
+patch("run_pipeline.py",
+      "device = 'cuda' if torch.cuda.is_available() else 'cpu'\n  DET = S3FD",
+      "device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')\n  DET = S3FD")
+patch("detectors/s3fd/nets.py",
+      """            loc.view(loc.size(0), -1, 4),
+            self.softmax(conf.view(conf.size(0), -1, 2)),
+            self.priors.type(type(x.data)).to(self.device)""",
+      """            loc.view(loc.size(0), -1, 4).cpu(),
+            self.softmax(conf.view(conf.size(0), -1, 2)).cpu(),
+            self.priors.float().cpu()""")
+PYEOF
+
 # --- weight download helpers --------------------------------------------
 file_size() { if [[ -f "$1" ]]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
 

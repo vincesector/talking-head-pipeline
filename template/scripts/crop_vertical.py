@@ -12,7 +12,7 @@ centred on the median tracked head x, so the subject sits in the horizontal cent
 
 --track is the output of track_head.py run on the 16:9 file. Without it the
 crop is the frame centre. Output is 1080x1920 unless --width/--height say
-otherwise, encoded libx264 crf 18 at the source frame rate, CFR.
+otherwise, encoded libx264 crf 17 (veryfast) at the source frame rate, CFR.
 """
 import argparse
 import json
@@ -38,7 +38,7 @@ def main():
     ap.add_argument("--track", help="track.json from track_head.py on this (16:9) file")
     ap.add_argument("--width", type=int, default=1080)
     ap.add_argument("--height", type=int, default=1920)
-    ap.add_argument("--crf", type=int, default=18)
+    ap.add_argument("--crf", type=int, default=17)
     a = ap.parse_args()
 
     sw, sh, num, den = probe(a.video)
@@ -62,7 +62,7 @@ def main():
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-i", a.video, "-vf", vf,
          "-r", f"{num}/{den}", "-fps_mode", "cfr",
-         "-c:v", "libx264", "-crf", str(a.crf), "-preset", "fast", "-pix_fmt", "yuv420p",
+         "-c:v", "libx264", "-crf", str(a.crf), "-preset", "veryfast", "-pix_fmt", "yuv420p",
          "-c:a", "copy", "-movflags", "+faststart", a.output],
         check=True)
     ow, oh, _, _ = probe(a.output)

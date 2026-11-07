@@ -54,7 +54,7 @@ every output goes to `<raw dir>/<raw stem>_autocut/`.
 python3 "$THP_HOME/scripts/autocut/autocut.py" "<raw.mp4>"
 ```
 
-Sync detection is the slow part (3 to 10 minutes, more on a busy machine or CPU-only Linux). Say so
+Sync detection is the slow part (about 1 minute on Apple Silicon, 3 to 10 minutes on CPU-only Linux, more on a busy machine). Say so
 before you start. The rest of plan mode is about a minute once models are cached; the first run per
 language downloads models (several minutes). Add `--lang en|pt|it|es|fr|de|nl` only if the detected
 language is wrong. `--offset SECONDS` skips detection when the offset is already known;

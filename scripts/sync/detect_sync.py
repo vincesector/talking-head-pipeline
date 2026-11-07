@@ -82,6 +82,23 @@ def ffprobe_duration(path):
     return float(r.stdout.strip())
 
 
+PROXY_LONG_SIDE = 1280     # 720p-class proxy windows
+FACEDET_SCALE_FULL = 0.25  # syncnet_python's default face-detect scale, tuned for the source frame
+
+
+# Hardware encoder on a Mac (about a second per window); software ultrafast everywhere else.
+PROXY_ENCODER = (["-c:v", "h264_videotoolbox", "-b:v", "8M"] if sys.platform == "darwin"
+                 else ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"])
+
+
+def video_size(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path],
+                        check=True, capture_output=True, text=True)
+    w, h = (int(x) for x in r.stdout.strip().split("x"))
+    return w, h
+
+
 def cut_windows(video, n, window_len=20.0, skip_start=2.0, outdir=None):
     dur = ffprobe_duration(video)
     span = dur - skip_start - window_len
@@ -92,20 +109,32 @@ def cut_windows(video, n, window_len=20.0, skip_start=2.0, outdir=None):
     starts = [skip_start + i * step for i in range(n)]
 
     outdir = outdir or tempfile.mkdtemp(prefix="detect_sync_")
+    # Windows are re-encoded as 720p proxies (hardware encoder, a second or two) instead
+    # of stream-copied at full size: decoding and resizing 1440p frames dominated the run.
+    # The face-detect scale rises by the same factor so the detector still sees the same
+    # ~360p image.
+    w, h = video_size(video)
+    long_side = max(w, h)
+    vf, facedet_scale = [], FACEDET_SCALE_FULL
+    if long_side > PROXY_LONG_SIDE:
+        vf = ["-vf", f"scale={PROXY_LONG_SIDE}:-2" if w >= h else f"scale=-2:{PROXY_LONG_SIDE}"]
+        facedet_scale = round(FACEDET_SCALE_FULL * long_side / PROXY_LONG_SIDE, 4)
     clips = []
     for i, s in enumerate(starts):
         clip = os.path.join(outdir, f"win{i}_{s:.1f}.mp4")
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{s:.3f}",
-                         "-t", f"{window_len:.3f}", "-i", video, "-c", "copy", clip],
+                         "-t", f"{window_len:.3f}", "-i", video, *vf,
+                         *PROXY_ENCODER, "-c:a", "copy", clip],
                         check=True)
         clips.append((s, s + window_len, clip))
-    return clips, outdir
+    return clips, outdir, facedet_scale
 
 
-def run_syncnet_on_clip(clip, data_dir, reference):
+def run_syncnet_on_clip(clip, data_dir, reference, facedet_scale):
     # stage 1: face detect + track + crop (writes data_dir/pycrop/<reference>/*.avi)
     p1 = subprocess.run([SYNCNET_PY, "run_pipeline.py", "--videofile", clip,
-                          "--reference", reference, "--data_dir", data_dir, "--overwrite"],
+                          "--reference", reference, "--data_dir", data_dir, "--overwrite",
+                          "--facedet_scale", str(facedet_scale)],
                          cwd=SYNCNET_REPO, capture_output=True, text=True)
     if p1.returncode != 0:
         return None, p1.stdout + p1.stderr
@@ -144,13 +173,13 @@ def main():
         sys.exit(f"syncnet_python checkout not found at {SYNCNET_REPO} -- "
                   f"run {SETUP_SCRIPT} to set it up")
 
-    clips, clipdir = cut_windows(args.video, args.windows, window_len=args.window_len)
+    clips, clipdir, facedet_scale = cut_windows(args.video, args.windows, window_len=args.window_len)
     data_dir = tempfile.mkdtemp(prefix="detect_sync_data_")
 
     results = []
     for i, (start, end, clip) in enumerate(clips):
         reference = f"w{i}"
-        result, log = run_syncnet_on_clip(clip, data_dir, reference)
+        result, log = run_syncnet_on_clip(clip, data_dir, reference, facedet_scale)
         if result is None:
             print(f"window {i} [{start:.1f}-{end:.1f}s]: FAILED (no offset detected)", file=sys.stderr)
             print(log[-3000:], file=sys.stderr)

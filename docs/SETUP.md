@@ -72,8 +72,9 @@ scripts/sync/setup_syncnet.sh
 
 Builds a Python 3.10 venv and clones [joonson/syncnet_python](https://github.com/joonson/syncnet_python)
 into `~/.local/share/talking-head-pipeline/syncnet/`, then downloads its two weight files (~145 MB)
-from a Hugging Face mirror. Idempotent; re-run to resume. Runs on CPU (slow: 1.5-5 min per 20 s
-window) or CUDA. Without it, autocut still works if you pass `--offset <seconds>` (measure once with
+from a Hugging Face mirror, and patches the checkout so face detection runs on the Apple GPU (MPS) when there
+is one. Idempotent; re-run to resume. `detect_sync.py` analyses 720p proxy copies of its windows: about 30 s per
+20 s window on Apple Silicon, 1.5-5 min on CPU only, or CUDA. Without it, autocut still works if you pass `--offset <seconds>` (measure once with
 a clap: `scripts/sync/measure_sync.py`) or `--no-sync`.
 
 ### MediaPipe face detector - one command per project

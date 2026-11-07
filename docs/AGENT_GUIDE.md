@@ -61,7 +61,7 @@ Workdir: `<raw dir>/<raw stem>_autocut/`. Every stage is cached and skipped on r
 | Stage | What | Output | Cost |
 |---|---|---|---|
 | 01 probe | ffprobe | info.json | instant |
-| 02 sync | SyncNet on 2 windows (start, end) -> offset; ffmpeg shift | synced.mp4 (or a link if 0) | 3-10 min (skip with --offset) |
+| 02 sync | SyncNet on 2 windows (start, end) -> offset; ffmpeg shift | synced.mp4 (or a link if 0) | ~1 min on Apple Silicon, 3-10 min CPU-only (skip with --offset) |
 | 03 audio | 16 kHz mono | audio.wav | instant |
 | 04 transcribe | Whisper, word timestamps | transcript.raw.json | ~10 s for a 2 min take on Apple Silicon |
 | 05 align | forced aligner re-times word edges | transcript.json | ~25 s on first run per language + model download |

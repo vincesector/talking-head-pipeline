@@ -34,6 +34,10 @@ MIN_CONFIDENCE = 0.55
 MAX_JUMP = 0.09
 # How hard to punish distance from the previous position when scoring.
 CONTINUITY_WEIGHT = 3.0
+# Detection runs on frames this wide: anchors move 3 to 4 px on average at 1440p
+# (18 px worst case) and the loop sheds the full-size colour conversion and detection
+# cost. Decoding the source is about half the remaining time (2026-11-07).
+DETECT_WIDTH = 640
 
 
 def pick(detections, width, height, previous):
@@ -72,6 +76,9 @@ def detect(video_path: Path, model_path: Path, cuts=()):
         )
     )
 
+    scale = min(1.0, DETECT_WIDTH / width)
+    small = (round(width * scale), round(height * scale))
+
     raw = []
     previous = None
     cutset = {int(c) for c in cuts}
@@ -85,12 +92,13 @@ def detect(video_path: Path, model_path: Path, cuts=()):
             # where it was or the continuity term drags the pick backwards.
             previous = None
 
+        small_frame = cv2.resize(frame, small, interpolation=cv2.INTER_AREA)
         image = mp.Image(
             image_format=mp.ImageFormat.SRGB,
-            data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+            data=cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB),
         )
         result = detector.detect_for_video(image, int(index / fps * 1000))
-        chosen = pick(result.detections or [], width, height, previous)
+        chosen = pick(result.detections or [], *small, previous)
 
         if chosen is None:
             raw.append({"frame": index, "cx": None, "cy": None, "top": None,
@@ -100,9 +108,9 @@ def detect(video_path: Path, model_path: Path, cuts=()):
             previous = (cx, cy)
             raw.append({
                 "frame": index, "cx": cx, "cy": cy,
-                "top": box.origin_y / height,
-                "w": box.width / width,
-                "h": box.height / height,
+                "top": box.origin_y / small[1],
+                "w": box.width / small[0],
+                "h": box.height / small[1],
                 "conf": confidence,
             })
         index += 1

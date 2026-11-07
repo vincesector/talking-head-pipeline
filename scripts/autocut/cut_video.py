@@ -255,7 +255,7 @@ def cut_range(source, start, end, out_path, fade_out=0.03, frames=None):
         # start offset); the concat stacked those frames and the picture ran 0.57 s
         # behind the sound by the end of a 12 min cut.
         *(["-frames:v", str(frames)] if frames else []),
-        "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+        "-c:v", "libx264", "-crf", "17", "-preset", "veryfast",
         # PCM, not AAC: every AAC piece carried ~25 ms of encoder padding that
         # the concat kept, so the cut grew 0.22 s over 8 joins and captions
         # (timemap-exact) ran early by the end.
