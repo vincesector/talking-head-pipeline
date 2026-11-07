@@ -41,6 +41,15 @@ If you already have skills called `autocut` or `dynamic-edit`, the installer lea
 Force one with `WHISPER_BACKEND=mlx|faster`; pick another faster-whisper size with
 `FASTER_WHISPER_MODEL=medium`. Models land in `~/.cache/huggingface` on first use.
 
+### Parakeet (English transcript) - automatic
+
+On Apple Silicon, English takes are transcribed by NVIDIA Parakeet TDT 0.6B v3
+(`scripts/autocut/parakeet_asr.py`, `parakeet-mlx` via `uv run`, weights from Hugging Face on first use).
+It runs in windows of at most 30 s cut at real silences, with the MLX cache capped at 512 MB (never one
+pass over the whole file). Every other language and platform stays on Whisper above. `--lang auto` checks
+the language first; anything but a confident English uses Whisper. Parakeet TDT 0.6B v3 is CC-BY-4.0:
+credit NVIDIA (see `NOTICE`).
+
 ### CrisperWhisper (verbatim pass) - automatic
 
 The stumble/restart detector and the final cut check run CrisperWhisper 2.0 (`turbo`) through
@@ -137,6 +146,7 @@ soft whooshes, 2-3 soft impacts, UI ticks and clicks, one ping.
 | Piece | macOS (Apple Silicon) | Linux |
 |---|---|---|
 | Whisper | mlx-whisper (Metal) | faster-whisper (CUDA or CPU) |
+| English transcript | Parakeet TDT 0.6B v3 (parakeet-mlx) | Whisper (faster-whisper) |
 | CrisperWhisper, WhisperX, SyncNet | torch MPS/CPU | torch CUDA/CPU |
 | Remotion render | Chrome headless, ANGLE | same; install Chrome deps (`npx remotion browser ensure`) |
 | 3D renderer | `--use-angle=metal` (GPU) | defaults to SwiftShader (CPU, slow but works); set `RENDER3D_GL_ARGS="--use-angle=vulkan"` with a GPU |

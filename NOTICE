@@ -1,0 +1,7 @@
+Third-party models used by these pipelines
+
+NVIDIA Parakeet TDT 0.6B v3 (parakeet-tdt-0.6b-v3), (c) NVIDIA, licensed CC-BY-4.0
+https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+Used through parakeet-mlx (Apache-2.0, https://github.com/senstella/parakeet-mlx) for the English
+transcript in /autocut (scripts/autocut/parakeet_asr.py). The weights are downloaded at run time and
+are not redistributed here.

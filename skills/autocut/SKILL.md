@@ -40,6 +40,22 @@ let's talk about what happened" comes back as one clean sentence. A second, verb
 transcription (CrisperWhisper) keeps every false start, repeat and filler; stumbles and restarts
 are found in that.
 
+## Transcription models
+
+| Language | Main transcript (plan text, captions) | Speed | Verbatim stumble/QA pass |
+|---|---|---|---|
+| English, Apple Silicon | Parakeet TDT 0.6B v3 via `parakeet-mlx` (`scripts/autocut/parakeet_asr.py`) | about 11 s per 10 min of audio including the language check (Whisper: about 22 s) | CrisperWhisper |
+| Portuguese, other languages, language unknown, other platforms | Whisper (`whisper_backend.py`: mlx-whisper or faster-whisper) | unchanged | CrisperWhisper |
+
+Parakeet kept sentences Whisper dropped and put no words inside long silences on English takes. Portuguese
+stays on Whisper because Parakeet's Portuguese is European and flips into English mid-sentence. Rules the
+code enforces: never one Parakeet pass over the whole file (full attention silently dropped 35 to 94 s of
+speech on 6 to 10 min takes and peaked at 24 to 27 GB); audio is cut at real silences into windows of at
+most 30 s with the MLX cache capped at 512 MB (about 3.5 GB). A Parakeet failure falls back to Whisper. The
+output has the Whisper JSON shape, so every later stage reads it unchanged. Known weak spots: some numbers
+come out as words ("twenty-six"), and brand names can drift, so check names in captions. `info.json` records
+the engine under `asr`. Attribution: NVIDIA Parakeet TDT 0.6B v3, CC-BY-4.0 (see `NOTICE`).
+
 ## Workflow
 
 ### 1. Find the file, never touch it
@@ -48,11 +64,38 @@ Use the file the human named, or the newest recording in their capture folder (a
 that is). Confirm filename and duration in one line. The raw file is read-only for the whole job;
 every output goes to `<raw dir>/<raw stem>_autocut/`.
 
+### 1b. Find the script (before planning)
+
+If the human reads from a script, give it to the stumble pass as a HINT: a phrase the script also says
+twice at that point ("a bouncer at the door. The door opens") is intended speech and is not cut. It never
+forces a cut, and people ad-lib, so a repeat that is not in the script is judged by the normal rules.
+Python cannot read this conversation, you can, so pick the script in this order:
+
+1. **The most recent script in THIS conversation**: a script file path mentioned or written in the
+   session, or script text pasted or written in the chat. Pasted text only: save it to
+   `<workdir>/script_from_chat.md` (create the workdir first) and use that.
+2. **Otherwise the auto-detect next to the take**: `SCRIPTS.md` or `script.md` in the raw's folder or its
+   parent. `autocut.py` does this by itself when `--script` is absent.
+3. **Otherwise no script.** The sentence-boundary rule in `find_stumbles.py` still stops the worst false cut.
+
+Always pass the chosen file with `--script <path>` (repeatable). The plan prints how many of the take's
+4-word runs the script contains; a right script scores about 15% to 90% (ad-libs lower it), a wrong one
+under 1%. Under 5% means it does not match this take: say so, drop it, and re-plan with step 2's
+auto-detect (delete `stumbles.json` and `plan.json` in the workdir first, or add `--force`). State which
+script was used, and where it came from, in the plan summary (step 3) so the human can correct it.
+
+Optional, not built: the same script could also help choose which take of a retake to keep.
+
 ### 2. Plan mode
 
 ```bash
-python3 "$THP_HOME/scripts/autocut/autocut.py" "<raw.mp4>"
+python3 "$THP_HOME/scripts/autocut/autocut.py" "<raw.mp4>" --script "<script path, if any>"
 ```
+
+Transcription is chosen by language: **English on Apple Silicon goes to Parakeet TDT 0.6B v3, everything
+else (Portuguese above all) and every other platform uses Whisper**. `--lang auto` (default) checks the
+language first with Whisper's detector on three 30 s samples (about 3 s); anything but a confident English,
+or a failed check, uses Whisper. See "Transcription models" below.
 
 Sync detection is the slow part (about 1 minute on Apple Silicon, 3 to 10 minutes on CPU-only Linux, more on a busy machine). Say so
 before you start. The rest of plan mode is about a minute once models are cached; the first run per
@@ -71,6 +114,8 @@ Read `plan.md` from the workdir and present it (never paste the raw file):
 ```
   Source    take-01.mp4   01:47.9
   Sync      +240 ms (audio early), confidence 5.5, spread 0 ms
+  Words     Parakeet TDT 0.6B v3 (en)   |   Whisper (other languages)
+  Script    SCRIPTS.md (day folder, auto-detected), 18% match, 2 repeats kept as intended
   Result    01:40.5 planned, 7.3 s removed, 5 cuts
 
   00:00.0-00:02.8   cut   silence 3.0 s          2.8 s

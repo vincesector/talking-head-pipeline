@@ -30,8 +30,12 @@ Four kinds of span, all found by scanning the word list left to right:
    applied depends on how far apart the two occurrences are and whether a
    clause boundary (a comma, period, etc.) sits between them:
      - 0 words apart ("immediate"): applied regardless of punctuation, if
-       the restart begins within 1.2s. n==1 additionally needs either a
-       real gap (>=0.12s) or a fully-adjacent one (~0s, likely a genuine
+       the restart begins within 1.2s, EXCEPT when a sentence end (. ? !)
+       closes the first occurrence and that occurrence started mid-sentence:
+       "a bouncer at the door. The door opens" repeats "the door" only because
+       one sentence ends with it and the next begins with it, so it is
+       skipped (a lower-case repeat after the full stop is the same breath
+       and still counts). n==1 additionally needs either a real gap (>=0.12s) or a fully-adjacent one (~0s, likely a genuine
        stammer) between the two words, or a fragment between them -- a
        small-but-real gap ("very very good") is fluent emphasis, not a
        stumble. very/really/super/many/much are never cut at n==1: they're
@@ -79,6 +83,7 @@ Usage:
     uv run find_stumbles.py <verbatim.json> [--offset SECONDS] [-o out.json] [--print]
 """
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -90,6 +95,7 @@ MAX_RESTART_GAP_S = 1.2  # how long a silence can separate the two occurrences a
 MIN_SINGLE_WORD_GAP_S = 0.12
 RESTART_TIE_EPSILON = 0.12  # see _restart_point
 CLAUSE_PUNCT = set(",.?!:;")
+SENTENCE_PUNCT = set(".?!")
 FILLER_WORDS = {"um", "uh", "uhm", "hmm", "erm", "ah"}  # English only; see set_language()
 LANG = "en"
 
@@ -107,6 +113,126 @@ NUMBER_WORDS = {
     "nineteen", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
     "hundred", "thousand", "million", "billion",
 }
+
+
+SCRIPTS = []  # [(path, normalised tokens)]; see set_scripts()
+SCRIPT_CONTEXT = 4  # tokens on each side compared when a script is asked "do you say this twice here?"
+SCRIPT_CONTEXT_MIN_RATIO = 0.4
+SCRIPT_TOKEN_FUZZ = 0.8  # a script token this similar to a spoken one counts as the same word
+SCRIPT_PROTECTED = []  # repeats skipped because the script says them twice, for the caller to report
+_UNITS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen".split())}
+_TENS = {w: 10 * (i + 2) for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split())}
+_SCALES = {"hundred": 100, "thousand": 1000, "million": 10**6, "billion": 10**9}
+
+
+def merge_numbers(tokens, with_map=False):
+    """Spoken and written numbers meet in one form: ["two", "million"], ["2", "million"] and ["2000000"]
+    all become "2000000", ["twenty", "six"] and ["26"] become "26". Applied to the script and to the
+    spoken side before they are compared. With with_map=True also returns, per input token, the index of
+    the output token it ended up in."""
+    out, where, i = [], [], 0
+    while i < len(tokens):
+        t = tokens[i]
+        total, cur, j, last = 0, 0, i, None  # last: kind of the previous number word, for what may follow it
+        small, after_big = 10**12, None  # smallest big scale used so far; "two million two million" is two numbers
+        if t.isdigit() and i + 1 < len(tokens) and tokens[i + 1] in _SCALES:
+            cur, j, last = int(t), i, "digits"
+        while j < len(tokens):
+            w = tokens[j]
+            if j == i and last == "digits":
+                j += 1
+                continue
+            if w in _SCALES and last is not None and (_SCALES[w] == 100 or _SCALES[w] < small):
+                if _SCALES[w] == 100:
+                    cur = max(cur, 1) * 100
+                else:
+                    total += max(cur, 1) * _SCALES[w]
+                    cur = 0
+                    small, after_big = _SCALES[w], j + 1
+                last = "scale"
+            elif w in _UNITS and _UNITS[w] < 10 and last in (None, "tens", "scale"):
+                cur += _UNITS[w]
+                last = "unit"
+            elif (w in _TENS or w in _UNITS) and last in (None, "scale"):
+                cur += _TENS.get(w) or _UNITS[w]
+                last = "tens"
+            else:
+                if w in _SCALES and after_big is not None:  # a second "million": the words since the first one start a new number
+                    j, cur = after_big, 0
+                break
+            j += 1
+        if j == i:
+            out.append(t)
+            where.append(len(out) - 1)
+            i += 1
+        else:
+            out.append(str(total + cur))
+            where.extend([len(out) - 1] * (j - i))
+            i = j
+    return (out, where) if with_map else out
+
+
+def script_tokens(text):
+    """Lower-case words of a script, punctuation gone, thousands separators folded into the number
+    ("2,000,000" is one token), hyphens and slashes splitting ("24/7" is "24" "7"), numbers merged."""
+    text = re.sub(r"(?<=\d),(?=\d{3})", "", text.lower())
+    return merge_numbers([t for t in (normalize(x) for x in re.split(r"[\s/\u2013\u2014-]+", text)) if t])
+
+
+def set_scripts(paths):
+    global SCRIPTS
+    SCRIPTS = [(str(p), script_tokens(Path(p).read_text(errors="replace"))) for p in paths]
+    SCRIPT_PROTECTED.clear()
+
+
+def _same_word(spoken, written):
+    if spoken == written:
+        return True
+    return len(spoken) >= 4 and difflib.SequenceMatcher(None, spoken, written).ratio() >= SCRIPT_TOKEN_FUZZ
+
+
+def _gram_at(script, i, gram):
+    return i >= 0 and i + len(gram) <= len(script) and all(_same_word(g, script[i + k]) for k, g in enumerate(gram))
+
+
+def script_says_twice(content_tokens, p, q, n):
+    """The path of a script that has this same phrase twice at this same distance, in the same neighbourhood,
+    else None: the repeat is written down, so it is speech to keep, not a stumble. Fuzzy on spelling and
+    numbers, local, and only ever a hint: a take that wanders from the script, or a repeat the script does
+    not contain, is judged by the normal rules."""
+    if not SCRIPTS:
+        return None
+    spoken, where = merge_numbers(content_tokens, with_map=True)
+    P, Q, last = where[p], where[q], where[p + n - 1]
+    gram, dist = spoken[P:last + 1], Q - P
+    if dist < len(gram):
+        return None
+    ctx = SCRIPT_CONTEXT
+    spoken_ctx = spoken[max(0, P - ctx):P] + spoken[Q + len(gram):Q + len(gram) + ctx]
+    for path, script in SCRIPTS:
+        for i in range(len(script) - dist - len(gram) + 1):
+            if not (_gram_at(script, i, gram) and _gram_at(script, i + dist, gram)):
+                continue
+            script_ctx = script[max(0, i - ctx):i] + script[i + dist + len(gram):i + dist + len(gram) + ctx]
+            if difflib.SequenceMatcher(None, spoken_ctx, script_ctx, autojunk=False).ratio() >= SCRIPT_CONTEXT_MIN_RATIO:
+                return path
+    return None
+
+
+def script_coverage(words):
+    """Share of the take's 4-word runs that appear in a script (any of them): how well the script matches
+    the take. Ad-libs lower it; a script for a different take sends it to near zero."""
+    if not SCRIPTS:
+        return {}
+    spoken = merge_numbers([t for t in (normalize(w["word"]) for w in words if not is_filler_transparent(w["word"])) if t])
+    grams = [tuple(spoken[i:i + 4]) for i in range(len(spoken) - 3)]
+    out = {}
+    for path, script in SCRIPTS:
+        have = {tuple(script[i:i + 4]) for i in range(len(script) - 3)}
+        out[path] = sum(g in have for g in grams) / len(grams) if grams else 0.0
+    return out
 
 
 def normalize(word):
@@ -141,6 +267,11 @@ def is_filler_transparent(raw_word):
 def ends_with_clause_punct(raw_word):
     w = raw_word.rstrip()
     return bool(w) and w[-1] in CLAUSE_PUNCT
+
+
+def ends_sentence(raw_word):
+    w = raw_word.rstrip()
+    return bool(w) and w[-1] in SENTENCE_PUNCT
 
 
 def load_words(path, offset):
@@ -247,6 +378,17 @@ def _try_n(words, content_tokens, content_idx, p, n, gram):
     n_content = len(content_tokens)
     first_last = content_idx[p + n - 1]  # original index of the first occurrence's last word
 
+    def found(q, second_first, kind, apply):
+        """The match to report, or None when a script says this very repeat twice (intended speech)."""
+        in_script = script_says_twice(content_tokens, p, q, n)
+        if in_script:
+            kept = {"at": words[content_idx[p]]["start"], "text": _text(words, content_idx[p], first_last + 1),
+                    "script": in_script}
+            if kept not in SCRIPT_PROTECTED:
+                SCRIPT_PROTECTED.append(kept)
+            return None
+        return content_idx[p], _restart_point(words, first_last, second_first), n, kind, apply
+
     for gap_words in range(0, MAX_GAP_WORDS + 1):
         q = p + n + gap_words
         if q + n > n_content or content_tokens[q:q + n] != gram:
@@ -271,14 +413,25 @@ def _try_n(words, content_tokens, content_idx, p, n, gram):
         has_punct = any(ends_with_clause_punct(words[k]["word"]) for k in range(content_idx[p], second_first))
 
         if gap_words == 0:
+            # A sentence ends right after the first occurrence, and that occurrence began mid-sentence:
+            # it is the finished tail of a sentence, not an abandoned attempt ("a bouncer at the door.
+            # The door opens ...": "the door" is said twice because the next sentence starts with it).
+            # A real restart of a whole sentence begins at a sentence start ("... thank you very much.
+            # So I'll see you. So I'll see you on ...") and still applies; an abandoned mid-sentence
+            # attempt ("we went to, we went to the store") has no sentence end after it.
+            if (ends_sentence(words[first_last]["word"]) and not _starts_sentence(words, content_idx, p)
+                    and not words[second_first]["word"].lstrip()[:1].islower()):  # lower case after the full stop = same breath
+                continue
             if n == 1:
                 if normalize(words[content_idx[p]]["word"]) in INTENSIFIERS:
                     continue  # emphasis ("very very"), never a stumble -- keep looking elsewhere
                 frag_between = any(is_fragment(words[k]["word"]) for k in range(first_last + 1, second_first))
                 if not (time_gap >= MIN_SINGLE_WORD_GAP_S or time_gap <= 1e-6 or frag_between):
                     continue  # small-but-real gap: fluent doubling, not a stumble
-            return content_idx[p], _restart_point(words, first_last, second_first), n, "repeat", True
-
+            hit = found(q, second_first, "repeat", True)
+            if hit:
+                return hit
+            continue
         frag_between = any(is_fragment(words[k]["word"]) for k in range(first_last + 1, second_first))
         if any(is_number_word(words[k]["word"]) for k in range(first_last + 1, second_first)):
             continue  # a number in between is content being narrated, not a stumble remnant
@@ -292,23 +445,37 @@ def _try_n(words, content_tokens, content_idx, p, n, gram):
             if gap_words > 2 or not frag_between:
                 continue
             kind, apply = ("restart?", False) if has_punct else ("repeat", True)
-            return content_idx[p], _restart_point(words, first_last, second_first), n, kind, apply
-
+            hit = found(q, second_first, kind, apply)
+            if hit:
+                return hit
+            continue
         if gap_words in (1, 2):
             # A 2-word scaffold 1-2 words apart ("and just [wait] and just [earn]",
             # "if [you] if you") is short enough that hitting it twice in fluent
             # speech is common; require a 3+ word phrase to auto-apply here, but
             # still flag a 2-word one for review.
             if n == 2 or has_punct:
-                return content_idx[p], _restart_point(words, first_last, second_first), n, "restart?", False
-            return content_idx[p], _restart_point(words, first_last, second_first), n, "repeat", True
-
+                hit = found(q, second_first, "restart?", False)
+                if hit:
+                    return hit
+                continue
+            hit = found(q, second_first, "repeat", True)
+            if hit:
+                return hit
+            continue
         # gap_words in (3, 4): only a punctuation-free run is even flagged
         if has_punct:
             continue
-        return content_idx[p], _restart_point(words, first_last, second_first), n, "restart?", False
-
+        hit = found(q, second_first, "restart?", False)
+        if hit:
+            return hit
+        continue
     return None
+
+
+def _starts_sentence(words, content_idx, p):
+    """True when content word p opens a sentence: it is the first word, or the word before it ends one."""
+    return p == 0 or ends_sentence(words[content_idx[p - 1]]["word"])
 
 
 def _restart_point(words, first_last, second_first):
@@ -422,12 +589,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("verbatim", help="verbatim words JSON, CrisperWhisper shape: {\"words\":[{\"word\",\"start\",\"end\"}]}")
     ap.add_argument("--lang", default="en", help="ISO code; only en has spelled-out fillers")
+    ap.add_argument("--script", action="append", default=[],
+                    help="teleprompter script (text or markdown); repeatable. A repeat the script also says at "
+                         "that point is kept. Only ever a hint: it never forces a cut.")
 
     ap.add_argument("--offset", type=float, default=0.0, help="seconds added to every timestamp before scanning")
     ap.add_argument("-o", "--output", default=None, help="output JSON path (default: <input>.stumbles.json)")
     ap.add_argument("--print", dest="do_print", action="store_true", help="print a human-readable list")
     args = ap.parse_args()
     set_language(args.lang)
+    set_scripts(args.script)
 
     words = load_words(args.verbatim, args.offset)
     spans = build_spans(words)
@@ -438,6 +609,12 @@ def main():
     if args.do_print:
         print_spans(spans)
         print()
+    for path, cov in script_coverage(words).items():
+        print(f"script: {path} coverage={cov:.2f}")
+    if SCRIPTS:
+        print(f"script: {len(SCRIPT_PROTECTED)} repeat(s) kept because the script says them twice")
+        for pr in SCRIPT_PROTECTED:
+            print(f"  kept at {fmt_ts(pr['at'])}: {pr['text']!r} ({pr['script']})")
     n_applied = sum(1 for s in spans if s["apply"])
     n_other = len(spans) - n_applied
     print(f"wrote {out_path} ({n_applied} applied, {n_other} not applied)")

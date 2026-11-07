@@ -196,7 +196,7 @@ for individuals and companies up to 3 employees and requires a paid company lice
 
 Third-party models and tools are downloaded from their sources and keep their own licenses:
 SyncNet ([joonson/syncnet_python](https://github.com/joonson/syncnet_python), MIT), Whisper
-(MIT), mlx-whisper (MIT), faster-whisper (MIT), WhisperX (BSD-2), CrisperWhisper (**CC BY-NC 4.0: non-commercial**, see below), MediaPipe (Apache-2.0), Robust Video Matting (**GPL-3.0**, see below), backgroundremover / U2-Net (MIT / Apache-2.0, legacy fallback),
+(MIT), mlx-whisper (MIT), faster-whisper (MIT), NVIDIA Parakeet TDT 0.6B v3 (**CC-BY-4.0, attribution required**: see `NOTICE`) via parakeet-mlx (Apache-2.0), WhisperX (BSD-2), CrisperWhisper (**CC BY-NC 4.0: non-commercial**, see below), MediaPipe (Apache-2.0), Robust Video Matting (**GPL-3.0**, see below), backgroundremover / U2-Net (MIT / Apache-2.0, legacy fallback),
 Google Fonts (mostly SIL OFL). Check each before commercial use. Sound effects and fonts you add are
 under their own licenses.
 

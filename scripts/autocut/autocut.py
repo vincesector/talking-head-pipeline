@@ -6,8 +6,10 @@ already exists and is individually proven:
 
   sync    sync/detect_sync.py + sync/fix_sync.sh
   audio   ffmpeg
-  words   Whisper (whisper_backend.py: mlx-whisper on Apple Silicon, faster-whisper elsewhere),
-          then align/align_words.py to re-time the edges
+  words   English on Apple Silicon: Parakeet TDT 0.6B v3 in <=30 s silence windows (parakeet_asr.py,
+          NVIDIA, CC-BY-4.0). Every other language, any language it cannot identify, and every other
+          platform: Whisper (whisper_backend.py: mlx-whisper on Apple Silicon, faster-whisper
+          elsewhere). Then align/align_words.py re-times the edges
   cuts    autocut/cut_video.py (imported for its silence detector and its
           range-shaping functions during planning, shelled out to unchanged
           for the actual render)
@@ -51,6 +53,7 @@ import time
 from pathlib import Path
 
 import audit_removed_spans
+import parakeet_asr
 import whisper_backend
 import find_restarts
 import qa_checks
@@ -187,10 +190,25 @@ def extract_audio(synced, workdir):
 
 # ------------------------------------------------------------ 04 transcribe
 
-def transcribe(wav, workdir):
+def transcribe(wav, workdir, lang):
+    """Main transcript -> (transcript.raw.json, asr info). English on Apple Silicon goes to Parakeet;
+    everything else (Portuguese above all: Parakeet's Portuguese is European and drifts into English),
+    any unidentified language and any other platform goes to Whisper. A Parakeet failure falls back to
+    Whisper."""
+    engine, detected, prob = parakeet_asr.route(lang, wav)
+    asr = {"engine": engine, "lang_arg": lang, "detected_lang": detected, "detected_prob": round(prob, 3)}
     target = workdir / "transcript.raw.json"
+    if engine == "parakeet":
+        try:
+            parakeet_asr.transcribe(wav, target)
+            asr["engine"] = "parakeet-tdt-0.6b-v3"
+            return target, asr
+        except RuntimeError as e:
+            print(f"  warning: Parakeet failed, falling back to Whisper -- {str(e)[-400:]}")
+            target.unlink(missing_ok=True)
+    asr["engine"] = f"whisper ({whisper_backend.backend()})"
     whisper_backend.transcribe(wav, target)
-    return target
+    return target, asr
 
 
 # ----------------------------------------------------------------- 05 align
@@ -250,13 +268,34 @@ def run_verbatim(wav, lang):
     return json.loads(r.stdout)["words"]
 
 
-def find_stumbles(verbatim_path, workdir, lang=None):
+SCRIPT_NAMES = ("SCRIPTS.md", "script.md")  # teleprompter script names looked for next to the take
+MIN_SCRIPT_COVERAGE = 0.05  # 4-word runs of the take found in the script: right script ~0.15 to 0.9, wrong one < 0.01
+
+
+def find_scripts(raw):
+    """Scripts next to the take or in its folder's parent (the day or project folder), best guess first."""
+    found, seen = [], set()
+    for d in (raw.parent, raw.parent.parent):
+        for name in SCRIPT_NAMES:
+            f = d / name
+            if f.is_file() and f.resolve() not in seen:
+                seen.add(f.resolve())
+                found.append(f)
+    return found
+
+
+def find_stumbles(verbatim_path, workdir, lang=None, scripts=()):
+    """Returns (spans, script_report). script_report: {path: coverage} plus the repeats the script kept."""
     out = workdir / "stumbles.json"
     cmd = ["uv", "run", str(FIND_STUMBLES_PY), str(verbatim_path), "-o", str(out), "--lang", lang or "en"]
+    for sc in scripts:
+        cmd += ["--script", str(sc)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"error: find_stumbles.py failed:\n{(r.stderr or '')[-2000:]}")
-    return json.loads(out.read_text())
+    report = {"coverage": {m.group(1): float(m.group(2)) for m in re.finditer(r"^script: (.+) coverage=([\d.]+)$", r.stdout, re.M)},
+              "kept": [m.group(1) for m in re.finditer(r"^  kept at (.+)$", r.stdout, re.M)]}
+    return json.loads(out.read_text()), report
 
 
 def workdir_lang(workdir):
@@ -431,6 +470,18 @@ def write_plan_md(path, raw, info, keep_ranges, cuts, planned_total, raw_duratio
     else:
         lines.append("- Sync offset used: 0.000s (--no-sync)")
 
+    asr = info.get("asr")
+    if asr:
+        lines.append(f"- Transcript: {asr['engine']} (language arg {asr['lang_arg']}, detected {asr['detected_lang']})")
+    sc = info.get("script")
+    if sc:
+        low = [p for p, c in sc["coverage"].items() if c < MIN_SCRIPT_COVERAGE]
+        lines.append("- Script: " + ", ".join(f"{p} ({sc['coverage'].get(p, 0):.0%} match)" for p in sc["files"]) +
+                     f" [{sc['source']}]; kept {len(sc['kept'])} repeat(s) as intended speech" +
+                     (f". LOW MATCH for {', '.join(low)}: probably not this take's script" if low else ""))
+    else:
+        lines.append("- Script: none (stumbles judged without one)")
+
     align_info = info.get("align", {})
     shift = align_info.get("shift")
     if shift:
@@ -542,7 +593,7 @@ def write_plan_md(path, raw, info, keep_ranges, cuts, planned_total, raw_duratio
     Path(path).write_text("\n".join(lines) + "\n")
 
 
-def stage_plan(raw, workdir, lang, offset, no_sync, force):
+def stage_plan(raw, workdir, lang, offset, no_sync, force, script_args=()):
     info = Info(workdir / "info.json")
     cut_video_mod = load_cut_video()
 
@@ -584,8 +635,10 @@ def stage_plan(raw, workdir, lang, offset, no_sync, force):
     raw_transcript = workdir / "transcript.raw.json"
     cached = raw_transcript.exists() and not force
     if not cached:
-        raw_transcript = transcribe(wav, workdir)
-    print(f"04 transcribe: {'cached' if cached else 'done'} ({time.time() - t0:.2f}s)")
+        raw_transcript, asr = transcribe(wav, workdir, lang)
+        info.set("asr", asr)
+    print(f"04 transcribe: {'cached' if cached else 'done'} ({time.time() - t0:.2f}s) "
+          f"engine={(info.get('asr') or {}).get('engine', 'whisper')}")
     whisper_lang = json.loads(raw_transcript.read_text()).get("language")
 
     t0 = time.time()
@@ -608,6 +661,14 @@ def stage_plan(raw, workdir, lang, offset, no_sync, force):
     retakes = json.loads(retakes_path.read_text()) if cached else find_retakes(transcript_path, workdir)
     print(f"07 retakes: {'cached' if cached else 'done'} ({time.time() - t0:.2f}s) {len(retakes)} candidate(s)")
 
+    if script_args:
+        scripts, script_source = [Path(x).resolve() for x in script_args], "--script"
+    else:
+        scripts, script_source = find_scripts(raw), "auto-detected next to the take"
+    for sc in scripts:
+        if not sc.is_file():
+            sys.exit(f"error: script {sc} not found")
+
     t0 = time.time()
     verbatim_path = workdir / "verbatim.json"
     cached = verbatim_path.exists() and not force
@@ -619,7 +680,17 @@ def stage_plan(raw, workdir, lang, offset, no_sync, force):
         verbatim_path.write_text(json.dumps(verbatim, indent=2, ensure_ascii=False))
     stumbles_path = workdir / "stumbles.json"
     cached_stumbles = stumbles_path.exists() and not force
-    stumbles = json.loads(stumbles_path.read_text()) if cached_stumbles else find_stumbles(verbatim_path, workdir, lang)
+    if cached_stumbles:
+        stumbles = json.loads(stumbles_path.read_text())
+    else:
+        stumbles, script_report = find_stumbles(verbatim_path, workdir, lang, scripts)
+        if scripts:
+            info.set("script", {"files": [str(x) for x in scripts], "source": script_source, **script_report})
+            for path, cov in script_report["coverage"].items():
+                flag = "" if cov >= MIN_SCRIPT_COVERAGE else "  LOW: this script does not look like this take"
+                print(f"  script {path}: {cov:.0%} of the take's 4-word runs are in it{flag}")
+            if script_report["kept"]:
+                print(f"  script kept {len(script_report['kept'])} repeat(s) as intended speech")
     applied_stumbles = [s for s in stumbles if s["apply"]]
     fillers = [s for s in stumbles if not s["apply"]]
     print(f"07b stumbles: {'cached' if cached and cached_stumbles else 'done'} ({time.time() - t0:.2f}s) "
@@ -805,6 +876,11 @@ def main():
     sync.add_argument("--offset", type=float, default=None)
     sync.add_argument("--no-sync", action="store_true")
     ap.add_argument("--workdir", default=None)
+    ap.add_argument("--script", action="append", default=[],
+                     help="Script for this take (SCRIPTS.md, script.md or any text), repeatable. A repeated "
+                          "phrase the script also says at that point is kept as intended speech; the script never forces a "
+                          "cut. Default: SCRIPTS.md / script.md next to the take or in its parent folder. Needs --force on "
+                          "a workdir whose stumbles were already computed.")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--render", action="store_true")
     ap.add_argument("--no-cap-pauses", action="store_true",
@@ -840,7 +916,7 @@ def main():
     if args.render:
         stage_render(raw, workdir, args.force, cap_pauses=not args.no_cap_pauses)
     else:
-        stage_plan(raw, workdir, args.lang, args.offset, args.no_sync, args.force)
+        stage_plan(raw, workdir, args.lang, args.offset, args.no_sync, args.force, args.script)
 
 
 if __name__ == "__main__":
